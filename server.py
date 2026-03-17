@@ -49,14 +49,14 @@ class mymodel(nn.Module):
 
         self.decoder_embed = nn.Linear(self.encoder_hidden_dimension, self.decoder_hidden_dim)
         
-        self.decoderlayer=nn.TransformerDecoderLayer(
+        self.decoderlayer=nn.TransformerEncoderLayer(
             d_model=self.decoder_hidden_dim,
             nhead=self.decoderhead,
             dim_feedforward=self.decoder_hidden_dim*3,
             batch_first=True
         )
 
-        self.decoder=nn.TransformerDecoder(self.decoderlayer,num_layers=self.no_decoderlayer)
+        self.decoder=nn.TransformerEncoder(self.decoderlayer,num_layers=self.no_decoderlayer)
         self.decoder_positions = nn.Parameter(torch.randn(1, self.patchestotal, self.decoder_hidden_dim))
 
         self.output_layer = nn.Linear(self.decoder_hidden_dim, 768)
@@ -99,22 +99,27 @@ class mymodel(nn.Module):
 
         
         decoder_input=self.decoder_embed(decoder_input)
-        
+        #print(encoderoutput.shape)
+        #print(decoder_input.shape)
         decoder_input=decoder_input+self.decoder_positions
         decoder_output = self.decoder(
-            tgt=decoder_input,  
-            memory=encoderoutput  
+            decoder_input,  
+            #memory=encoderoutput  
         )
 
         reconstruction = self.output_layer(decoder_output)  # (B, N, patch_dim)
-
+        #print(reconstruction.shape)
         return reconstruction,mask_indices_tensor, unmask_indices
         
+
+        
+    
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 mymodel = mymodel().to(device)
 
-checkpoint = torch.load("model.pth", map_location=device)
+checkpoint = torch.load("model5.pth", map_location=device)
 # Remove DataParallel prefix if exists
 new_state_dict = OrderedDict()
 for k, v in checkpoint.items():
@@ -153,18 +158,23 @@ def patchify(img: torch.Tensor) -> torch.Tensor:
     return patches  # shape: [batch, num_patches, patch_dim]
 
 
-def unpatchify(patches: torch.Tensor, image_size=(224, 224)) -> torch.Tensor:
-    """Convert patches back to image (placeholder, implement your logic if needed)"""
+def unpatchify(patches: torch.Tensor, img_size=224, patch_size=16) -> torch.Tensor:
+    """Convert patches back to image tensor"""
     batch, num_patches, patch_dim = patches.shape
-    patch_size = 16
-    channels = patch_dim // (patch_size * patch_size)
-    patchh = patchw = int(num_patches ** 0.5)
-
-    x = patches.reshape(batch, patchh, patchw, channels, patch_size, patch_size)
-    x = x.permute(0, 3, 1, 4, 2, 5)
-    img = x.reshape(batch, channels, patchh * patch_size, patchw * patch_size)
+    channels = 3  # Fixed for RGB
+    num_patches_h = img_size // patch_size  # 14
+    num_patches_w = img_size // patch_size  # 14
+    
+    # Reshape to (B, H/patch, W/patch, C, patch, patch)
+    patches = patches.reshape(batch, num_patches_h, num_patches_w, 
+                              channels, patch_size, patch_size)
+    
+    # Permute to (B, C, H/patch, patch, W/patch, patch)
+    patches = patches.permute(0, 3, 1, 4, 2, 5)
+    
+    # Reshape to final image (B, C, H, W)
+    img = patches.reshape(batch, channels, img_size, img_size)
     return img
-
 
 # -----------------------------
 # FastAPI endpoint
@@ -218,21 +228,28 @@ async def predict(file: UploadFile = File(...)):
     masked_img_tensor = unpatchify(masked_patches)
     
     # 3. Reconstructed image (using model's full output)
-    reconstructed_img_tensor = unpatchify(reconstructed_patches)
+    #reconstructed_img_tensor = unpatchify(reconstructed_patches)
     
     # 4. (Optional) Reconstruction with original unmasked + predicted masked
     combined_patches = original_patches.clone()
     combined_patches[:, maskedpatcheslist, :] = reconstructed_patches[:, maskedpatcheslist, :]
     combined_img_tensor = unpatchify(combined_patches)
 
+    full_recon_img_tensor = unpatchify(reconstructed_patches)
     def tensor_to_pil(tensor):
         tensor = tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()  # HWC
-        tensor = (tensor * 255).clip(0, 255).astype(np.uint8)
+    
+    # IMPORTANT: Clip to [0,1] before scaling to 0-255
+        tensor = np.clip(tensor, 0, 1)
+    
+        tensor = (tensor * 255).astype(np.uint8)
         return Image.fromarray(tensor)
 
     masked_img = tensor_to_pil(masked_img_tensor)
+    #combined_img = tensor_to_pil(combined_img_tensor)
+    #full_recon_img = tensor_to_pil(full_recon_img_tensor)
     generated_img = tensor_to_pil(combined_img_tensor)
-
+    #original_img = tensor_to_pil(img_tensor)
     # -----------------------------
     # Return as base64
     # -----------------------------
