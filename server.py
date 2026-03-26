@@ -10,6 +10,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+from skimage.metrics import structural_similarity as skimage_ssim
 
 
 app = FastAPI()
@@ -119,7 +120,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 mymodel = mymodel().to(device)
 
-checkpoint = torch.load("model5.pth", map_location=device)
+checkpoint = torch.load("model5 (1).pth", map_location=device)
 # Remove DataParallel prefix if exists
 new_state_dict = OrderedDict()
 for k, v in checkpoint.items():
@@ -175,6 +176,37 @@ def unpatchify(patches: torch.Tensor, img_size=224, patch_size=16) -> torch.Tens
     # Reshape to final image (B, C, H, W)
     img = patches.reshape(batch, channels, img_size, img_size)
     return img
+
+
+def _tensor_to_hwc_uint8(tensor: torch.Tensor) -> np.ndarray:
+    image = tensor.detach().squeeze(0).permute(1, 2, 0).cpu().numpy()
+    image = np.clip(image, 0.0, 1.0)
+    return np.round(image * 255.0).astype(np.uint8)
+
+
+def compute_psnr(original: torch.Tensor, reconstructed: torch.Tensor):
+    try:
+        original = torch.clamp(original.detach(), 0.0, 1.0)
+        reconstructed = torch.clamp(reconstructed.detach(), 0.0, 1.0)
+        mse = torch.mean((original - reconstructed) ** 2).item()
+        if mse <= 1e-12:
+            return 100.0
+        return float(10.0 * np.log10(1.0 / mse))
+    except Exception:
+        return None
+
+
+def compute_ssim(original: torch.Tensor, reconstructed: torch.Tensor):
+    if skimage_ssim is None:
+        return None
+
+    try:
+        original_uint8 = _tensor_to_hwc_uint8(original)
+        reconstructed_uint8 = _tensor_to_hwc_uint8(reconstructed)
+        score = skimage_ssim(original_uint8, reconstructed_uint8, channel_axis=2, data_range=255)
+        return float(score)
+    except Exception:
+        return None
 
 # -----------------------------
 # FastAPI endpoint
@@ -235,6 +267,10 @@ async def predict(file: UploadFile = File(...)):
     combined_patches[:, maskedpatcheslist, :] = reconstructed_patches[:, maskedpatcheslist, :]
     combined_img_tensor = unpatchify(combined_patches)
 
+    # Quantitative evaluation for full-image reconstruction quality
+    psnr_value = compute_psnr(img_tensor, combined_img_tensor)
+    ssim_value = compute_ssim(img_tensor, combined_img_tensor)
+
     full_recon_img_tensor = unpatchify(reconstructed_patches)
     def tensor_to_pil(tensor):
         tensor = tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()  # HWC
@@ -258,5 +294,7 @@ async def predict(file: UploadFile = File(...)):
 
     return JSONResponse({
         "masked": masked_b64,
-        "generated": generated_b64
+        "generated": generated_b64,
+        "psnr": round(psnr_value, 2) if psnr_value is not None else None,
+        "ssim": round(ssim_value, 2) if ssim_value is not None else None
     })
