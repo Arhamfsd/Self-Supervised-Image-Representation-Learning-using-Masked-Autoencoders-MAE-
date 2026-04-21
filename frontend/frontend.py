@@ -28,7 +28,7 @@ if uploaded_file is not None:
 
         with st.spinner("Processing..."):
             response = requests.post(
-                "http://127.0.0.1:8000/predict",
+                "http://backend:8000/predict",
                 files=files
             )
 

@@ -1,0 +1,6 @@
+fastapi==0.123.0
+uvicorn==0.38.0
+pillow==10.3.0
+numpy==2.2.6
+torch==2.11.0
+scikit-image==0.25.2

@@ -120,7 +120,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 mymodel = mymodel().to(device)
 
-checkpoint = torch.load("model5 (1).pth", map_location=device)
+checkpoint = torch.load("model5.pth", map_location=device)
 # Remove DataParallel prefix if exists
 new_state_dict = OrderedDict()
 for k, v in checkpoint.items():
